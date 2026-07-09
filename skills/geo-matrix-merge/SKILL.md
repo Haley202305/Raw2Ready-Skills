@@ -1,87 +1,58 @@
 ---
 name: geo-matrix-merge
-description: Merge GEO (Gene Expression Omnibus) supplementary matrix files from multiple samples into a single AnnData object. Use when the user needs to combine GSM*.matrix.txt.gz files, merge single-cell count matrices downloaded from GEO, or build a unified AnnData (.h5ad) from multiple GEO samples.
+description: Merge multiple GEO single-cell matrix files (txt.gz, tsv, mtx) from a directory into a single AnnData h5ad file. Use when the user wants to combine GEO expression matrices, convert GEO count tables to h5ad, or merge GSM sample files into one scRNA-seq object. Also supports inspecting individual matrix file structure.
+argument-hint: <samples_directory> [-o output.h5ad]
 ---
 
 # GEO Matrix Merge
 
-Merge multiple GEO supplementary matrix files (e.g. `GSM*.filtered.matrix.txt.gz`) into a single AnnData object ready for downstream single-cell analysis.
+Merge GEO matrix files into a single AnnData (h5ad) object, or inspect a single matrix file.
 
-## When to Use
+## Usage
 
-- User has downloaded GEO supplementary files containing expression matrices
-- User wants to combine multiple GSM samples into one `.h5ad` file
-- User needs to inspect the structure of a GEO matrix file before merging
-
-## Dependencies
-
-Install before running:
+### Merge mode
 
 ```bash
-pip install pandas numpy anndata scipy
+python3 ~/.qoder-cn/skills/geo-matrix-merge/scripts/geo_matrix_merge.py <samples_directory> [-o output.h5ad]
 ```
 
-## Workflow
-
-### Step 1 — Inspect (optional)
-
-Before merging, preview a matrix file to confirm its structure:
+### Inspect mode
 
 ```bash
-python scripts/geo_matrix_merge.py inspect /path/to/GSM1234567.filtered.matrix.txt.gz
+python3 ~/.qoder-cn/skills/geo-matrix-merge/scripts/geo_matrix_merge.py --inspect <file_path> [-n 10]
 ```
 
-Output includes shape, gene/cell name examples, data type, value range, and a head preview.
+## Auto-detected Formats
 
-### Step 2 — Merge
+The script auto-detects the data format from directory contents and dispatches to the appropriate reader:
 
-Merge all matrix files in a directory:
+| Format | Detection Rule | Handler |
+|--------|---------------|---------|
+| **10X** | Directory contains one `matrix.mtx.gz` (+ `features.tsv.gz` / `barcodes.tsv.gz`) | `merge_10x` |
+| **Multi-10X** | Directory contains multiple `*_matrix.mtx.gz` + `*_features.tsv.gz` + `*_barcodes.tsv.gz` triplets | `merge_multi_10x` |
+| **counts+cellname** | Directory contains `*.counts.*` + `*.cellname.*` paired files | `merge_counts_cellname` |
+| **Single GEO** | Only one `.txt.gz` / `.tsv.gz` file | `merge_single_geo` |
+| **Multi GEO** | Multiple `GSM*.txt.gz` / `*.filtered.matrix.txt.gz` files | `merge_multi_geo` |
 
-```bash
-python scripts/geo_matrix_merge.py merge /path/to/samples_dir/ -o merged_output.h5ad
-```
+### Format details
 
-If `-o` is omitted, the output defaults to `merged_geo_samples.h5ad` inside the input directory.
+**10X format**: Standard CellRanger output with `matrix.mtx.gz`, `features.tsv.gz`, `barcodes.tsv.gz`. Read via `scipy.io.mmread` with sparse storage.
 
-## What the Script Does
+**Multi-10X format**: Multiple 10X samples in one directory. Files follow the naming pattern `GSM*_sampleName_matrix.mtx.gz`, `GSM*_sampleName_features.tsv.gz`, `GSM*_sampleName_barcodes.tsv.gz`. The script groups files by sample prefix and merges all samples.
 
-1. **File discovery** — scans the directory for files matching common matrix patterns (`*.matrix.txt.gz`, `*.mtx.gz`, `*.tsv.gz`, etc.), prioritising GSM-prefixed files.
-2. **Format detection** — auto-detects plain text (tab/comma/space-delimited) vs Matrix Market (`.mtx`) format, with or without gzip compression.
-3. **Gene alignment** — collects the union of all gene names across samples and fills missing genes with zeros so every sample shares the same gene axis.
-4. **Cell barcode deduplication** — prepends a `{GSM}_{sampleName}_` prefix to each cell barcode to guarantee uniqueness across samples.
-5. **AnnData assembly** — transposes the combined (gene x cell) matrix into (cell x gene) layout, stores sample identity in `adata.obs['sample']`, and writes a `.h5ad` file.
+**counts+cellname format**: GEO-deposited paired files where `*.counts.*` contains the expression matrix (genes x cell indices) and `*.cellname.*` maps cell indices to real barcode names. The script auto-matches pairs by sample prefix.
+
+**Single GEO**: A single tab/comma-separated matrix file (genes x cells, with optional `Gene` symbol column).
+
+**Multi GEO**: Multiple GSM-prefixed matrix files. Each file is one sample. Cell barcodes are prefixed with sample name for uniqueness. Missing genes across samples are filled with 0.
 
 ## Output
 
-The resulting `.h5ad` file contains:
+- Default output: `<samples_directory>/merged_geo_samples.h5ad`
+- Sparse CSR matrix stored in `adata.X` (cells x genes)
+- `adata.obs['sample']`: sample identifier per cell
+- `adata.var['gene_symbol']`: gene symbol mapping (when available)
 
-| Component | Content |
-|-----------|---------|
-| `adata.X` | Merged expression matrix (cells x genes) |
-| `adata.obs` | Cell barcodes with a `sample` column |
-| `adata.var` | Gene names (union of all samples, deduplicated) |
+## Dependencies
 
-## Example
-
-```
-$ python scripts/geo_matrix_merge.py merge /data/geo_downloads/
-
-Found 3 matrix files: ['GSM3589420_PP019swap.filtered.matrix.txt.gz', ...]
-Loaded: GSM3589420_PP019swap.filtered.matrix.txt.gz, shape: (27654, 4521), sample: GSM3589420_PP019swap
-...
-Merged DataFrame shape: (27654, 12483)
-
-GEO Matrix Merge Complete
-==================================================
-Input directory: /data/geo_downloads/
-Matrix files: 3
-Merged shape: 12483 cells x 27654 genes
-Sample count: 3
-Output file: /data/geo_downloads/merged_geo_samples.h5ad
-```
-
-## Pitfalls
-
-- Files without `GSM` in the name are still merged if no GSM-prefixed files are found — verify this matches your intent.
-- Matrix Market format requires companion `_genes.txt` / `_barcodes.txt` files; if missing, generic names (`GENE_0`, `CELL_0`) are used.
-- Very large datasets (100k+ cells) may need significant RAM; consider sparse matrices for production pipelines.
+Requires: `pandas`, `numpy`, `anndata`, `scipy`.
